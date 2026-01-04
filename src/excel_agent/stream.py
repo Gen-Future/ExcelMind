@@ -307,27 +307,44 @@ async def stream_chat(message: str, history: list = None) -> AsyncGenerator[Dict
         max_iterations = 50
         
         for _ in range(max_iterations):
-            response = await llm.ainvoke(conversation)
-            response_text = response.content
+            # 将 ainvoke 改为 astream 以支持流式输出
+            full_response = ""
+            is_collecting_json = False
+            
+            # 【修复】默认将流式内容作为 "thinking" 输出
+            # 并检测 JSON 开始，一旦发现可能是 JSON 工具调用，就停止向前端推送 thinking 内容
+            # 这样前端的思考框里就不会出现一大坨 JSON 代码了
+            async for chunk in llm.astream(conversation):
+                content = chunk.content
+                if content:
+                    full_response += content
+
+                    # 简单的 JSON 检测逻辑
+                    # 如果遇到 ```json 或者 看起来像 { tool: 的开始，就停止推送
+                    if not is_collecting_json:
+                        if '```json' in full_response or ('{' in full_response and '"tool"' in full_response):
+                             is_collecting_json = True
+                        else:
+                             # 只有在还没开始生成 JSON 时才推送 Thinking
+                             yield {"type": "thinking", "content": full_response}
+            
+            # 流式输出结束后，标记本次思考完成
+            yield {"type": "thinking_done"}
+
+            response_text = full_response
+            
+            # 将完整的 AIMessage 加入历史
+            from langchain_core.messages import AIMessage
+            ai_message = AIMessage(content=response_text)
+            conversation.append(ai_message)
             
             # 解析工具调用
             tool_call = parse_tool_call(response_text)
             
             if tool_call and "tool" in tool_call:
-                # 尝试提取 JSON 之前的思考文本
-                thought_text = ""
-                json_start = response_text.find('{')
-                if json_match := re.search(r'```json', response_text):
-                    thought_text = response_text[:json_match.start()].strip()
-                elif json_start > 0:
-                    thought_text = response_text[:json_start].strip()
+                # 之前的代码会在这里提取 thinking 并发送，但现在我们已经流式发送了 thinking，
+                # 所以不需要再重复发送，避免重复
                 
-                # 如果有思考文本且长度足够，发送更新
-                if thought_text and len(thought_text) > 2:
-                    yield {"type": "thinking", "content": thought_text}
-                
-                yield {"type": "thinking_done"}
-
                 tool_name = tool_call["tool"]
                 tool_args = tool_call.get("args", {})
                 
@@ -349,11 +366,13 @@ async def stream_chat(message: str, history: list = None) -> AsyncGenerator[Dict
                 # 将工具结果作为新消息继续对话
                 result_message = f"工具 {tool_name} 执行结果：\n```json\n{json_dumps(tool_result, ensure_ascii=False, indent=2)}\n```\n\n请根据这个结果回答用户的问题。"
                 
-                conversation.append(response)
                 conversation.append(HumanMessage(content=result_message))
                 
             else:
-                # 没有工具调用，直接输出响应
+                # 没有工具调用，说明是最终回答
+                # 因为之前是作为 thinking 发送的，现在需要作为 token (正式回答) 再次发送
+                # 为了避免重复显示（Thinking 框 + 正文框），我们发送一个 clear_thinking 事件来清除之前的 Thinking 框
+                yield {"type": "clear_thinking"}
                 yield {"type": "token", "content": response_text}
                 yield {"type": "done", "content": response_text}
                 return

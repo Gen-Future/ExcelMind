@@ -1024,6 +1024,35 @@
             border-left: 3px solid var(--accent);
         }
 
+        /* 可折叠的思考块样式 */
+        .thinking-block details {
+            cursor: pointer;
+        }
+
+        .thinking-block summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--accent);
+            font-weight: 500;
+            list-style: none;
+            user-select: none;
+        }
+
+        .thinking-block summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .thinking-block summary::before {
+            content: '▶';
+            font-size: 0.7rem;
+            transition: transform 0.2s;
+        }
+
+        .thinking-block details[open] summary::before {
+            transform: rotate(90deg);
+        }
+
         .thinking-header {
             display: flex;
             align-items: center;
@@ -1036,6 +1065,11 @@
         .thinking-content {
             color: var(--text-secondary);
             white-space: pre-wrap;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            max-height: 300px;
+            overflow-y: auto;
         }
 
         .thinking-block.finished {
@@ -1043,7 +1077,8 @@
             opacity: 0.8;
         }
 
-        .thinking-block.finished .thinking-header {
+        .thinking-block.finished .thinking-header,
+        .thinking-block.finished summary {
             color: var(--text-secondary);
         }
 
@@ -2321,18 +2356,24 @@
                                         }
                                         return currentThinkingBlock;
                                     },
+                                    removeThinkingBlock: () => {
+                                        if (currentThinkingBlock) {
+                                            currentThinkingBlock.remove();
+                                            currentThinkingBlock = null;
+                                        }
+                                    },
                                     finishThinkingBlock: () => {
                                         if (currentThinkingBlock) {
                                             currentThinkingBlock.classList.add('finished');
-
                                             // 隐藏加载动画
                                             const dots = currentThinkingBlock.querySelector('.loading-dots');
-                                            if (dots) dots.remove(); // 直接移除更彻底
-
+                                            if (dots) dots.remove();
                                             // 更新标题文本
-                                            const headerText = currentThinkingBlock.querySelector('.thinking-header span:nth-child(2)');
-                                            if (headerText) headerText.textContent = '思考过程';
-
+                                            const titleSpan = currentThinkingBlock.querySelector('.thinking-title');
+                                            if (titleSpan) titleSpan.textContent = '思考过程';
+                                            // 自动折叠 details 元素
+                                            const details = currentThinkingBlock.querySelector('details');
+                                            if (details) details.removeAttribute('open');
                                             currentThinkingBlock = null;
                                         }
                                     },
@@ -2372,6 +2413,12 @@
                     tb.style.display = 'block';
                     break;
                 case 'thinking_done': ctx.finishThinkingBlock(); break;
+
+                // 新增：清除思考块 (用于当思考过程其实就是最终回答时，避免重复显示)
+                case 'clear_thinking':
+                    ctx.removeThinkingBlock();
+                    break;
+
                 case 'tool_call':
                     ctx.finishThinkingBlock();
                     const toolBlock = ctx.createToolBlock(event.name, event.args);
@@ -2410,11 +2457,14 @@
             const div = document.createElement('div');
             div.className = 'thinking-block';
             div.innerHTML = `
-                <div class="thinking-header">
-                    <span>🧠</span><span>思考中</span>
-                    <div class="loading-dots"><span></span><span></span><span></span></div>
-                </div>
-                <div class="thinking-content"></div>
+                <details open>
+                    <summary>
+                        <span>🧠</span>
+                        <span class="thinking-title">思考中</span>
+                        <div class="loading-dots"><span></span><span></span><span></span></div>
+                    </summary>
+                    <div class="thinking-content"></div>
+                </details>
             `;
             return div;
         }
